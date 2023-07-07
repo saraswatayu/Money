@@ -21,6 +21,19 @@ final class MoneyTests: XCTestCase {
         let ichimonEn = Money<JPY>(minorUnits: 10_000) // ¥10,000
         XCTAssertEqual(ichimonEn.amount, Decimal(string: "10000", locale: nil))
     }
+    
+    func testDistributedEvenly() {
+        let tenDollars = Money<USD>(10)
+        
+        let evenSplits = tenDollars.distributedEvenly(intoParts: 5)
+        XCTAssertEqual(evenSplits, [Money<USD>(2), Money<USD>(2), Money<USD>(2), Money<USD>(2), Money<USD>(2)])
+        
+        let unevenSplits = tenDollars.distributedEvenly(intoParts: 6)
+        XCTAssertEqual(unevenSplits, [Money<USD>(1.67), Money<USD>(1.67), Money<USD>(1.67), Money<USD>(1.67), Money<USD>(1.66), Money<USD>(1.66)])
+        
+        let proportionalSplits = tenDollars.distributedProportionally(between: [5, 2])
+        XCTAssertEqual(proportionalSplits, [Money<USD>(2.86), Money<USD>(7.14)])
+    }
 
     static var allTests = [
         ("testMonetaryCalculations", testMonetaryCalculations),

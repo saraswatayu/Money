@@ -10,7 +10,7 @@ public struct Money<Currency: CurrencyType>: Equatable, Hashable {
         self.amount = amount
     }
 
-    public init(minorUnits: Int) {
+    public init(minorUnits: Int64) {
         precondition(Currency.minorUnit >= 0)
 
         let sign: FloatingPointSign = minorUnits >= 0 ? .plus : .minus
@@ -32,6 +32,15 @@ public struct Money<Currency: CurrencyType>: Equatable, Hashable {
      */
     public var rounded: Money<Currency> {
         return Money<Currency>(amount.rounded(for: Currency.self))
+    }
+    
+    public var zero: Money<Currency> {
+        return Money<Currency>(Decimal(0))
+    }
+    
+    public var minorUnits: Int64 {
+        let number = NSDecimalNumber(decimal: amount)
+        return number.multiplying(byPowerOf10: Int16(currency.minorUnit)).int64Value
     }
 }
 
@@ -148,6 +157,91 @@ extension Money {
     public static func *= (lhs: inout Money<Currency>, rhs: Int) {
         lhs.amount *= Decimal(rhs)
     }
+}
+
+extension Money {
+    
+    /// Distributes the current amount into a set number of parts as evenly as possible.
+    /// - Note: Passing a negative or `0` value will result in an empty result.
+    /// - Complexity: O(*n*), where *n* is the `numParts`.
+    /// - Parameter numParts: The count of new values the single value should be distributed between as evenly as possible.
+    /// - Returns: A collection of currency values with their share of the amount distribution.
+    public func distributedEvenly(intoParts numParts: Int) -> [Self] {
+        guard numParts > 0 else { return [] }
+
+        let count = Int64(numParts)
+        
+        // courtesy of https://codereview.stackexchange.com/a/221221
+        let units = self.minorUnits
+        let fraction = units / count
+        let remainder = Int(abs(units) % count)
+        
+        var results: [Self] = .init(repeating: self.zero, count: numParts)
+        for index in 0..<remainder {
+            results[index] = Self(minorUnits: fraction + units.signum())
+        }
+        for index in remainder..<numParts {
+            results[index] = Self(minorUnits: fraction)
+        }
+        
+        return results
+    }
+    
+    /// Distributes the current amount between other amounts proportionally based on their original value.
+    ///
+    /// The resulting amounts will match the same sign (negative or positive) as the amount being distributed.
+    ///
+    /// For example:
+    ///
+    ///     let result = USD(-10).distributedProportionally(between: [5, 8.25])
+    ///     // result == [USD(-3.77), USD(-6.23)]
+    ///
+    /// - Note: In situations where all `originalValues` are equal, the amount will not be evenly distributed. The remainder will be biased towards the last
+    /// element in the `originalValues`.
+    ///
+    /// For example:
+    ///
+    ///      let result = USD(10.05).distributedProportionally(between: [1, 1, 1, 1, 1, 1])
+    ///      // result == [USD(1.67), USD(1.67), USD(1.67), USD(1.67), USD(1.67), USD(1.70)]
+    ///
+    /// In this case, it is more appropriate to call `distributedEvenly(intoParts:)`.
+    ///
+    /// - Complexity: O(*n*), where *n* is the number of `originalValues`.
+    /// - Parameter originalValues: A collection of values that should be scaled proportionally so that their sum equals this currency's amount.
+    /// - Returns: A collection of currency values that are scaled proportionally from an original value whose sum equals this currency's amount.
+    public func distributedProportionally<T>(
+        between originalValues: T
+    ) -> [Self]
+    where T: Collection, T.Element == Self
+    {
+        guard originalValues.count > 0 else { return [] }
+        
+        var results: [Self] = .init(repeating: self.zero, count: originalValues.count)
+        
+        let desiredTotalUnits = self.minorUnits
+        guard desiredTotalUnits != 0 else { return results }
+        
+        let originalTotalUnits = originalValues.reduce(self.zero, +).minorUnits
+        
+        var currentTotalUnits: Int64 = 0
+        var index = 0
+        for value in originalValues.dropLast() {
+            defer { index += 1 }
+            
+            let proportion = Decimal(value.currency.minorUnit) / Decimal(originalTotalUnits)
+            let amount = (self.amount * proportion).scaledAndRounded(to: self.currency.minorUnit)
+            let newValue = Self(amount)
+            
+            defer { currentTotalUnits += newValue.minorUnits }
+            
+            results[index] = newValue
+        }
+        
+        results[originalValues.count - 1] = Self(minorUnits: desiredTotalUnits - currentTotalUnits)
+        
+        return results
+    }
+    
 }
 
 // MARK: - CustomStringConvertible
@@ -404,5 +498,20 @@ fileprivate extension Decimal {
         NSDecimalRound(&rounded, &approximate, currency.minorUnit, .bankers)
 
         return rounded
+    }
+    
+    func scaledAndRounded(to unitScale: Int) -> Decimal {
+        let scaled = scaled(to: unitScale)
+        var result = Decimal.zero
+        withUnsafePointer(to: scaled) { NSDecimalRound(&result, $0, unitScale, .bankers) }
+        return result
+    }
+    
+    func scaled(to scale: Int, inverse: Bool = false) -> Decimal {
+        return self * .init(
+            sign: .plus,
+            exponent: inverse ? scale * -1 : scale,
+            significand: 1
+        )
     }
 }
